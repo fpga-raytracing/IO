@@ -24,12 +24,12 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 // client: initialize transfer, without built-in error recovery
 // return result: 0 for success, -1 for fail
 // str param len < MAX_TCP_STRING, supports only binary data (does not consider endianness)
-int TCP_send(const unsigned char* data, unsigned total_size, char* name, char* addr, char* port);
+int TCP_send(const unsigned char* data, unsigned total_size, const char* name, const char* addr, const char* port);
 
 // server: waits and accepts transfer, with built-in error recovery
 // return: data size, -1 for failure; data_ptr (malloc); name_ptr (malloc)
 // ipv6 enables ipv6 support. In some OS including Windows, this disables ipv4
-int TCP_recv(unsigned char** data_ptr, char** name_ptr, char* port, bool ipv6);
+int TCP_recv(unsigned char** data_ptr, char** name_ptr, const char* port, bool ipv6);
 
 
 // TCP_recv() example
