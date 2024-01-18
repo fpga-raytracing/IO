@@ -2,8 +2,8 @@
 cmake_minimum_required(VERSION 3.1) 
 project(IO)
 
-add_executable(io "io.c" "io.h" "stb_image_write.h")
-target_include_directories(io PRIVATE ./)
+add_library(io "io.c" "io.h" "stb_image_write.h")
+target_include_directories(io PUBLIC ./)
 
 set_property(TARGET io PROPERTY C_STANDARD 99)
 set_property(TARGET io PROPERTY C_STANDARD_REQUIRED)
