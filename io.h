@@ -6,15 +6,19 @@
 #ifndef IO_H
 #define IO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MAX_TCP_STRING 64
 
 // Write .bmp. Faster to write but produces larger files.
 // Channels = 3 for RGB, 4 for RGBA.
-bool write_bmp(const char* filename, const void* data, int width, int height, int channels = 3);
+bool write_bmp(const char* filename, const void* data, int width, int height, int channels);
 
 // Write .png. Slower to write but produces smaller files.
 // Channels = 3 for RGB, 4 for RGBA.
-bool write_png(const char* filename, const void* data, int width, int height, int channels = 3);
+bool write_png(const char* filename, const void* data, int width, int height, int channels);
 
 
 // client: initialize transfer, without built-in error recovery
@@ -103,5 +107,9 @@ int main(int argc, char *argv[]) {
     free(data);
 }
 */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -40,8 +40,8 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
-typedef unsigned int uint
-typedef unsigned char byte
+typedef unsigned int uint;
+typedef unsigned char byte;
 
 
 bool write_bmp(const char* filename, const void* data, int width, int height, int channels) {
@@ -72,7 +72,7 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 // client: initialize transfer, without built-in error recovery
 // return result: 0 for success, -1 for fail
 // str param len < MAX_TCP_STRING, supports only binary data (does not consider endianness)
-int TCP_send(const unsigned char* data, unsigned total_size, char* name, char* addr, char* port) {
+int TCP_send(const byte* data, unsigned total_size, char* name, char* addr, char* port) {
     // parse
     if (!data || !name || !addr || !port || 
         strlen(name) >= MAX_TCP_STRING || strlen(addr) >= MAX_TCP_STRING || strlen(port) >= MAX_TCP_STRING) {
