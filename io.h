@@ -40,7 +40,7 @@ int TCP_recv(unsigned char** data_ptr, char** name_ptr, const char* port, bool i
 int main(int argc, char *argv[]) {
     if (argc != 4) {
         printf("invalid arguments!\n");
-        exit(1);
+        return -1;
     }
 
     // read from file
@@ -49,7 +49,7 @@ int main(int argc, char *argv[]) {
     fd = fopen(name, "rb");
     if (!fd) {
         printf("file not accessible!\n");
-        exit(1);
+        return -1;
     }
     fseek(fd, 0, SEEK_END);
     unsigned total_size = ftell(fd);
@@ -59,18 +59,28 @@ int main(int argc, char *argv[]) {
     fclose(fd);
 
     printf("read size: %d\n", total_size);
-    printf("read name: %s\n\n", name);
-    int result = TCP_send((const byte*)data, total_size, name, argv[1], argv[2]);
-    printf("\n");
-    if (result == -1) {
+    printf("read name: %s\n", name);
+
+    int result;
+    for (int i = 0; i < 3; i++) {
+        printf("\n");
+        result = TCP_send((const byte*)data, total_size, name, argv[1], argv[2]);
+        printf("\n");
+        if (result != -1) break;
         printf("send function failed!\n");
-        free(data);
-        exit(1);
+        #ifdef _WIN32
+            Sleep(2000);
+        #else
+            sleep(2);
+        #endif
     }
-    printf("send size: %d\n", result);
 
     // cleanup
     free(data);
+    if (result == -1) return -1;
+
+    printf("send size: %d\n", result);
+    return 0;
 }
 */
 
@@ -94,6 +104,7 @@ int main(int argc, char *argv[]) {
 
     byte* data;
     char* name;
+    printf("\n");
     int size = TCP_recv(&data, &name, argv[2], ipv6);
     printf("\n");
     if (size == -1) {

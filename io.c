@@ -20,6 +20,7 @@
 #include <string.h>
 
 #ifdef _WIN32
+    #include <windows.h>
     #include <winsock2.h>
     #include <ws2tcpip.h>
     // does not work in gcc, insert to the end of gcc command: -lws2_32
@@ -43,6 +44,7 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
+#define NET_TIMEOUT 5 // in seconds
 #define NET_MAX_CTRL NET_MAX_STRING+11
 #define ACK_YES "yes"
 #define ACK_NO "no"
@@ -60,12 +62,8 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 }
 
 
-// TO DO:
-// add dual-stack support
-// add timer
-
 /*
-    pkt format:
+    protocol:
     init: name, total_size
     data: data
     ack: ACK_YES
@@ -122,7 +120,7 @@ int recv_data(int socket, byte* data, int total_size, char* log_name) {
 // returns send data size (-1 for failure)
 int TCP_send(const byte* data, unsigned total_size, const char* name, const char* addr, const char* port) {
     // parse
-    if (!data || !name || !addr || !port || 
+    if (!total_size || !data || !name || !addr || !port || 
         strlen(name) >= NET_MAX_STRING || strlen(addr) >= NET_MAX_STRING || strlen(port) >= NET_MAX_STRING) {
         printf("ERROR: Invalid input!\n");
         return -1;
@@ -181,6 +179,12 @@ int TCP_send(const byte* data, unsigned total_size, const char* name, const char
     else printf("WARNING: server getnameinfo failed!\n");
     printf("MESSAGE: Send start.\n");
     freeaddrinfo(server_info);
+
+    // inactivity timer
+    struct timeval timer = {NET_TIMEOUT, 0};
+    if (setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, (char* ) &timer, sizeof(timer)) == -1) {
+        printf("WARNING: Inactivity timer failed!\n");
+    }
 
     // init msg
     char buffer[NET_MAX_CTRL];
@@ -330,6 +334,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
     // TCP connection
     char* name = NULL;
     byte* data = NULL;
+    struct timeval timer = {NET_TIMEOUT, 0};
     while(true) {
         if (name) free(name);
         if (data) free(data);
@@ -351,6 +356,11 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
             printf("MESSAGE: Incoming connection from addr: %s port: %s.\n", host, service);
         else printf("WARNING: Client getnameinfo failed!\n");
         printf("MESSAGE: Receive start.\n");
+
+        // inactivity timer
+        if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char* ) &timer, sizeof(timer)) == -1) {
+            printf("WARNING: Inactivity timer failed!\n");
+        }
 
         // init msg
         char buffer[NET_MAX_CTRL];
