@@ -20,10 +20,12 @@
 #include <string.h>
 
 #ifdef _WIN32
-    #include <windows.h>
+    // https://stackoverflow.com/questions/21399650/
+    // <Windows.h> must be included after winsock
     #include <winsock2.h>
+    #include <windows.h>
     #include <ws2tcpip.h>
-    // does not work in gcc, insert to the end of gcc command: -lws2_32
+    // does not work in mingw-gcc, add -lws2_32 to linker
     #pragma comment(lib, "ws2_32.lib")
 #else
     #include <unistd.h>
@@ -52,6 +54,11 @@
 typedef unsigned short ushort;
 typedef unsigned char byte;
 
+#ifdef _WIN32
+typedef SOCKET socket_t;
+#else
+typedef int socket_t;
+#endif
 
 bool write_bmp(const char* filename, const void* data, int width, int height, int channels) {
     return stbi_write_bmp(filename, width, height, channels, data);
@@ -72,7 +79,7 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 
 // TCP send loop
 // returns total byte send, -1 for error (with socket cleanup)
-int send_data(int socket, const byte* data, int total_size, char* log_name) {
+int send_data(socket_t socket, const byte* data, int total_size, char* log_name) {
     unsigned send_left = total_size;
     while(true) {
         int send_byte = send(socket, data+total_size-send_left, send_left, 0);
@@ -94,7 +101,7 @@ int send_data(int socket, const byte* data, int total_size, char* log_name) {
 
 // TCP recv loop
 // returns total byte recv, -1 for error (with socket cleanup); data (pre allocated)
-int recv_data(int socket, byte* data, int total_size, char* log_name) {
+int recv_data(socket_t socket, byte* data, int total_size, char* log_name) {
     unsigned recv_left = total_size;
     while(true) {
         int recv_byte = recv(socket, data+total_size-recv_left, recv_left, 0);
@@ -147,7 +154,7 @@ int TCP_send(const byte* data, unsigned total_size, const char* name, const char
     }
 
     // connect
-    int client_socket;
+    socket_t client_socket;
     for (p = server_info; p != NULL; p = p->ai_next) {
         client_socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         #ifdef _WIN32
@@ -155,7 +162,7 @@ int TCP_send(const byte* data, unsigned total_size, const char* name, const char
         #else
             if (client_socket == -1) continue;
         #endif
-        if (connect(client_socket, p->ai_addr, p->ai_addrlen) != -1) break;
+        if (connect(client_socket, p->ai_addr, (socklen_t)p->ai_addrlen) != -1) break;
         #ifdef _WIN32
             closesocket(client_socket);
         #else
@@ -173,7 +180,7 @@ int TCP_send(const byte* data, unsigned total_size, const char* name, const char
     }
     char host[NI_MAXHOST];
     char service[NI_MAXSERV];
-    if (getnameinfo(p->ai_addr, p->ai_addrlen, host, NI_MAXHOST, service,
+    if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
         NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
         printf("MESSAGE: Outgoing connection to addr: %s port: %s.\n", host, service);
     else printf("WARNING: server getnameinfo failed!\n");
@@ -286,7 +293,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
     }
 
     // bind & listen
-    int server_socket;
+    socket_t server_socket;
     for (p = server_info; p != NULL; p = p->ai_next) {
         server_socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         #ifdef _WIN32
@@ -294,7 +301,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
         #else
             if (server_socket == -1) continue;
         #endif
-        if (bind(server_socket, p->ai_addr, p->ai_addrlen) != -1) break;
+        if (bind(server_socket, p->ai_addr, (socklen_t)p->ai_addrlen) != -1) break;
         #ifdef _WIN32
             closesocket(server_socket);
         #else
@@ -325,7 +332,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
     }
     char host[NI_MAXHOST];
     char service[NI_MAXSERV];
-    if (getnameinfo(p->ai_addr, p->ai_addrlen, host, NI_MAXHOST, service,
+    if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
         NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
         printf("MESSAGE: Start to listen on addr: %s port: %s.\n", host, service);
     else printf("WARNING: Server getnameinfo failed!\n");
@@ -340,7 +347,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
         if (data) free(data);
         struct sockaddr_storage client_addr;
         socklen_t client_len = sizeof(client_addr);
-        int client_socket = accept(server_socket, (struct sockaddr*) &client_addr, &client_len);
+        socket_t client_socket = accept(server_socket, (struct sockaddr*) &client_addr, &client_len);
 
         #ifdef _WIN32
             if (client_socket == INVALID_SOCKET)
@@ -366,7 +373,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
         char buffer[NET_MAX_CTRL];
         memset(buffer, 0, NET_MAX_CTRL);
         if (recv_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initialize") == -1) continue;
-        int name_len = strlen(buffer)+1;
+        size_t name_len = strlen(buffer)+1;
         name = (char*)malloc(name_len);
         strcpy(name, buffer);
         
