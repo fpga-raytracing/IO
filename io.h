@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-#define NET_MAX_STRING 64
+#define NET_MAX_STRING 40 // max input string, for security
 
 // Write .bmp. Faster to write but produces larger files.
 // Channels = 3 for RGB, 4 for RGBA.
@@ -22,33 +22,31 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 
 
 // client: initializes data transfer, without built-in error recovery
-// str param len < NET_MAX_STRING
 // supports only binary data (does not consider endianness)
 // returns send data size (-1 for failure)
-int TCP_send(const unsigned char* data, unsigned total_size, const char* name, const char* addr, const char* port);
+int TCP_send(const unsigned char* data, unsigned total_size, const char* addr, const char* port);
 
 // server: waits and accepts data transfer, with built-in error recovery
 // ipv6 enables ipv6 support. In some OS including Windows, this disables ipv4
-// returns recv data size (-1 for failure); data ptr (malloc); name ptr (malloc)
-int TCP_recv(unsigned char** data_ptr, char** name_ptr, const char* port, bool ipv6);
+// returns recv data size (-1 for failure); data ptr (malloc)
+int TCP_recv(unsigned char** data_ptr, const char* port, bool ipv6);
 
 
 // TCP_send() example
 /*
-// exe ip_addr port file_name
-// example: client.exe ::1 50000 test.c
+// exe ip_addr port filename
+// example: client.exe ::1 50000 test.txt
 int main(int argc, char *argv[]) {
     if (argc != 4) {
-        printf("invalid arguments!\n");
+        fprintf(stderr, "invalid arguments!\n");
         return -1;
     }
 
     // read from file
-    char* name = argv[3];
     FILE* fd;
-    fd = fopen(name, "rb");
+    fd = fopen(argv[3], "rb");
     if (!fd) {
-        printf("file not accessible!\n");
+        fprintf(stderr, "file not accessible!\n");
         return -1;
     }
     fseek(fd, 0, SEEK_END);
@@ -58,16 +56,18 @@ int main(int argc, char *argv[]) {
     fread((void*) data, 1, total_size, fd);
     fclose(fd);
 
+    printf("read filename: %s\n", argv[3]);
     printf("read size: %d\n", total_size);
-    printf("read name: %s\n", name);
 
     int result;
     for (int i = 0; i < 3; i++) {
         printf("\n");
-        result = TCP_send((const byte*)data, total_size, name, argv[1], argv[2]);
+        result = TCP_send((const byte*)data, total_size, argv[1], argv[2]);
         printf("\n");
         if (result != -1) break;
-        printf("send function failed!\n");
+        fprintf(stderr, "send function failed!\n");
+
+        // wait and retry
         #ifdef _WIN32
             Sleep(2000);
         #else
@@ -87,40 +87,37 @@ int main(int argc, char *argv[]) {
 
 // TCP_recv() example
 /*
-// exe ipver port
-// example: server.exe 6 50000
+// exe ipver port filename
+// example: server.exe 6 50000 test.txt
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        printf("invalid arguments!\n");
+    if (argc != 4) {
+        fprintf(stderr, "invalid arguments!\n");
         exit(1);
     }
     bool ipv6;
     if (atoi(argv[1]) == 6) ipv6 = true;
     else if (atoi(argv[1]) == 4) ipv6 = false;
     else {
-        printf("invalid arguments!\n");
+        fprintf(stderr, "invalid arguments!\n");
         exit(1);
     }
 
     byte* data;
-    char* name;
     printf("\n");
-    int size = TCP_recv(&data, &name, argv[2], ipv6);
+    int size = TCP_recv(&data, argv[2], ipv6);
     printf("\n");
     if (size == -1) {
-        printf("receive function failed!\n");
+        fprintf(stderr, "receive function failed!\n");
         exit(1);
     }
     printf("receive size: %d\n", size);
-    printf("receive name: %s\n", name);
 
     // write to file
     FILE* fd;
-    fd = fopen(name, "wb");
+    fd = fopen(argv[3], "wb");
     if (!fd) {
-        printf("file not accessible!\n");
+        fprintf(stderr, "file not accessible!\n");
         free(data);
-        free(name);
         exit(1);
     }
     fwrite((void*) data, 1, size, fd);
@@ -128,7 +125,6 @@ int main(int argc, char *argv[]) {
     // cleanup
     fclose(fd);
     free(data);
-    free(name);
 }
 */
 

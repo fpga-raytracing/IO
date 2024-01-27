@@ -47,7 +47,7 @@
 #endif
 
 #define NET_TIMEOUT 5 // in seconds
-#define NET_MAX_CTRL NET_MAX_STRING+11
+#define NET_MAX_CTRL 64 // 11 is enough, reserved for other control commands
 #define ACK_YES "yes"
 #define ACK_NO "no"
 
@@ -71,7 +71,7 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 
 /*
     protocol:
-    init: name, total_size
+    init: total_size
     data: data
     ack: ACK_YES
 */
@@ -84,7 +84,7 @@ int send_data(socket_t socket, const byte* data, int total_size, char* log_name)
     while(true) {
         int send_byte = send(socket, data+total_size-send_left, send_left, 0);
         if (send_byte == -1) {
-            printf("ERROR: %s message send failed!\n", log_name);
+            fprintf(stderr, "ERROR: %s message send failed!\n", log_name);
             #ifdef _WIN32
                 closesocket(socket);
             #else
@@ -106,7 +106,7 @@ int recv_data(socket_t socket, byte* data, int total_size, char* log_name) {
     while(true) {
         int recv_byte = recv(socket, data+total_size-recv_left, recv_left, 0);
         if (recv_byte < 1) {
-            printf("ERROR: %s message receive failed!\n", log_name);
+            fprintf(stderr, "ERROR: %s message receive failed!\n", log_name);
             #ifdef _WIN32
                 closesocket(socket);
             #else
@@ -122,21 +122,20 @@ int recv_data(socket_t socket, byte* data, int total_size, char* log_name) {
 
 
 // client: initializes data transfer, without built-in error recovery
-// str param len < NET_MAX_STRING
 // supports only binary data (does not consider endianness)
 // returns send data size (-1 for failure)
-int TCP_send(const byte* data, unsigned total_size, const char* name, const char* addr, const char* port) {
+int TCP_send(const byte* data, unsigned total_size, const char* addr, const char* port) {
     // parse
-    if (!total_size || !data || !name || !addr || !port || 
-        strlen(name) >= NET_MAX_STRING || strlen(addr) >= NET_MAX_STRING || strlen(port) >= NET_MAX_STRING) {
-        printf("ERROR: Invalid input!\n");
+    if (!total_size || !data || !addr || !port || 
+        strlen(addr) >= NET_MAX_STRING || strlen(port) >= NET_MAX_STRING) {
+        fprintf(stderr, "ERROR: Invalid input!\n");
         return -1;
     }
 
     #ifdef _WIN32
         WSADATA wsaData;
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-            printf("ERROR: WSAStartup failed!\n");
+            fprintf(stderr, "ERROR: WSAStartup failed!\n");
             return -1;
         }
     #endif
@@ -146,7 +145,7 @@ int TCP_send(const byte* data, unsigned total_size, const char* name, const char
     hints.ai_family = AF_UNSPEC; // ipv4 & ipv6
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(addr, port, &hints, &server_info) != 0) {
-        printf("ERROR: Invalid addrinfo!\n");
+        fprintf(stderr, "ERROR: Invalid addrinfo!\n");
         #ifdef _WIN32
             WSACleanup();
         #endif
@@ -171,7 +170,7 @@ int TCP_send(const byte* data, unsigned total_size, const char* name, const char
         break;
     }
     if (p == NULL) {
-        printf("ERROR: Connection failed!\n");
+        fprintf(stderr, "ERROR: Connection failed!\n");
         freeaddrinfo(server_info);
         #ifdef _WIN32
             WSACleanup();
@@ -183,34 +182,34 @@ int TCP_send(const byte* data, unsigned total_size, const char* name, const char
     if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
         NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
         printf("MESSAGE: Outgoing connection to addr: %s port: %s.\n", host, service);
-    else printf("WARNING: server getnameinfo failed!\n");
+    else fprintf(stderr, "WARNING: server getnameinfo failed!\n");
     printf("MESSAGE: Send start.\n");
     freeaddrinfo(server_info);
 
     // inactivity timer
     struct timeval timer = {NET_TIMEOUT, 0};
     if (setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, (char* ) &timer, sizeof(timer)) == -1) {
-        printf("WARNING: Inactivity timer failed!\n");
+        fprintf(stderr, "WARNING: Inactivity timer failed!\n");
     }
 
     // init msg
     char buffer[NET_MAX_CTRL];
     memset(buffer, 0, NET_MAX_CTRL);
-    sprintf(strlen(strcpy(buffer, name))+1+buffer, "%u", total_size);
-    if (send_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initialize") == -1) {
+    sprintf(buffer, "%u", total_size);
+    if (send_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initial") == -1) {
         #ifdef _WIN32
             WSACleanup();
         #endif
         return -1;
     }
-    if (recv_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initialize") == -1) {
+    if (recv_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initial") == -1) {
         #ifdef _WIN32
             WSACleanup();
         #endif
         return -1;
     }
-    if (strcmp(buffer, ACK_YES)) {
-        printf("ERROR: Initialize message acknowledge failed!\n");
+    if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
+        fprintf(stderr, "ERROR: Initial message acknowledge failed!\n");
         #ifdef _WIN32
             closesocket(client_socket);
             WSACleanup();
@@ -234,7 +233,7 @@ int TCP_send(const byte* data, unsigned total_size, const char* name, const char
         return -1;
     }
     if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
-        printf("ERROR: Data message acknowledge failed!\n");
+        fprintf(stderr, "ERROR: Data message acknowledge failed!\n");
         #ifdef _WIN32
             closesocket(client_socket);
             WSACleanup();
@@ -260,20 +259,19 @@ int TCP_send(const byte* data, unsigned total_size, const char* name, const char
 
 // server: waits and accepts data transfer, with built-in error recovery
 // ipv6 enables ipv6 support. In some OS including Windows, this disables ipv4
-// returns recv data size (-1 for failure); data ptr (malloc); name ptr (malloc)
-int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
+// returns recv data size (-1 for failure); data ptr (malloc)
+int TCP_recv(byte** data_ptr, const char* port, bool ipv6) {
     // parse
-    if (!data_ptr || !name_ptr || strlen(port) >= NET_MAX_STRING) {
-        printf("ERROR: Invalid input!\n");
+    if (!data_ptr || strlen(port) >= NET_MAX_STRING) {
+       fprintf(stderr, "ERROR: Invalid input!\n");
         return -1;
     }
     *data_ptr = NULL;
-    *name_ptr = NULL;
 
     #ifdef _WIN32
         WSADATA wsaData;
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-            printf("ERROR: WSAStartup failed!\n");
+            fprintf(stderr, "ERROR: WSAStartup failed!\n");
             return -1;
         }
     #endif
@@ -285,7 +283,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
     if (getaddrinfo(NULL, port, &hints, &server_info) != 0) {
-        printf("ERROR: Invalid addrinfo!\n");
+        fprintf(stderr, "ERROR: Invalid addrinfo!\n");
         #ifdef _WIN32
             WSACleanup();
         #endif
@@ -310,7 +308,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
         break;
     }
     if (p == NULL) {
-        printf("ERROR: Bind failed!\n");
+        fprintf(stderr, "ERROR: Bind failed!\n");
         freeaddrinfo(server_info);
         #ifdef _WIN32
             WSACleanup();
@@ -318,7 +316,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
         return -1;
     }
     if (listen(server_socket, 4) == -1) {
-        printf("ERROR: Listen failed!\n");
+        fprintf(stderr, "ERROR: Listen failed!\n");
         #ifdef _WIN32
             closesocket(server_socket);
         #else
@@ -335,15 +333,13 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
     if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
         NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
         printf("MESSAGE: Start to listen on addr: %s port: %s.\n", host, service);
-    else printf("WARNING: Server getnameinfo failed!\n");
+    else fprintf(stderr, "WARNING: Server getnameinfo failed!\n");
     freeaddrinfo(server_info);
 
     // TCP connection
-    char* name = NULL;
     byte* data = NULL;
     struct timeval timer = {NET_TIMEOUT, 0};
     while(true) {
-        if (name) free(name);
         if (data) free(data);
         struct sockaddr_storage client_addr;
         socklen_t client_len = sizeof(client_addr);
@@ -355,33 +351,38 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
             if (client_socket == -1)
         #endif
         {
-            printf("ERROR: Accept failed!\n");
+            fprintf(stderr, "ERROR: Accept failed!\n");
             continue;
         }
         if (getnameinfo((struct sockaddr*)&client_addr, sizeof(struct sockaddr_storage), host, 
             NI_MAXHOST, service, NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
             printf("MESSAGE: Incoming connection from addr: %s port: %s.\n", host, service);
-        else printf("WARNING: Client getnameinfo failed!\n");
+        else fprintf(stderr, "WARNING: Client getnameinfo failed!\n");
         printf("MESSAGE: Receive start.\n");
 
         // inactivity timer
         if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char* ) &timer, sizeof(timer)) == -1) {
-            printf("WARNING: Inactivity timer failed!\n");
+            fprintf(stderr, "WARNING: Inactivity timer failed!\n");
         }
 
         // init msg
         char buffer[NET_MAX_CTRL];
         memset(buffer, 0, NET_MAX_CTRL);
-        if (recv_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initialize") == -1) continue;
-        size_t name_len = strlen(buffer)+1;
-        name = (char*)malloc(name_len);
-        strcpy(name, buffer);
-        
-        unsigned total_size = atoi(buffer+name_len);
+        if (recv_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initial") == -1) continue;   
+        unsigned total_size = atoi(buffer);
+        if (!total_size) {
+            fprintf(stderr, "ERROR: Initial message parse failed!\n");
+            #ifdef _WIN32
+                closesocket(client_socket);
+            #else
+                close(client_socket);
+            #endif
+            continue;
+        }
         data = (byte*)malloc(total_size);
 
         strcpy(buffer, ACK_YES);
-        if (send_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initialize") == -1) continue;
+        if (send_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initial") == -1) continue;
 
         // data msg
         if (recv_data(client_socket, data, total_size, "Data") == -1) continue;
@@ -390,7 +391,7 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
         // close
         byte temp[1];
         if (recv(client_socket, temp, 1, 0) == 0) printf("MESSAGE: Receive succeeded.\n");
-        else printf("ERROR: Unknown!\n");
+        else fprintf(stderr, "ERROR: Unknown!\n");
 
         #ifdef _WIN32
             closesocket(server_socket);
@@ -401,7 +402,6 @@ int TCP_recv(byte** data_ptr, char** name_ptr, const char* port, bool ipv6) {
         printf("MESSAGE: Connection closed.\n");
 
         *data_ptr = data;
-        *name_ptr = name;
         return total_size;
     }
 }
