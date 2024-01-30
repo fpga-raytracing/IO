@@ -22,7 +22,7 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 
 
 // client: initializes data transfer, without built-in error recovery
-// supports only binary data (does not consider endianness)
+// supports only binary data (does not consider endianness) of size in range (0B, 2GiB)
 // returns send data size (-1 for failure)
 int TCP_send(const unsigned char* data, unsigned total_size, const char* addr, const char* port);
 

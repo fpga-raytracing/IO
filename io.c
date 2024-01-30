@@ -78,8 +78,9 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 
 
 // TCP send loop
+// size should be in range (0B, 2GiB)
 // returns total byte send, -1 for error (with socket cleanup)
-int send_data(socket_t socket, const byte* data, int total_size, char* log_name) {
+int send_data(socket_t socket, const byte* data, unsigned total_size, char* log_name) {
     unsigned send_left = total_size;
     while(true) {
         int send_byte = send(socket, data+total_size-send_left, send_left, 0);
@@ -93,7 +94,7 @@ int send_data(socket_t socket, const byte* data, int total_size, char* log_name)
             return -1;
         }
         send_left -= send_byte;
-        //printf("send %s msg of size: %d, left: %d\n", log_name, send_byte, send_left); // test
+        //printf("send %s msg of size: %d, left: %u\n", log_name, send_byte, send_left); // test
         if (!send_left) return total_size;
     }
 }
@@ -101,7 +102,7 @@ int send_data(socket_t socket, const byte* data, int total_size, char* log_name)
 
 // TCP recv loop
 // returns total byte recv, -1 for error (with socket cleanup); data (pre allocated)
-int recv_data(socket_t socket, byte* data, int total_size, char* log_name) {
+int recv_data(socket_t socket, byte* data, unsigned total_size, char* log_name) {
     unsigned recv_left = total_size;
     while(true) {
         int recv_byte = recv(socket, data+total_size-recv_left, recv_left, 0);
@@ -115,18 +116,18 @@ int recv_data(socket_t socket, byte* data, int total_size, char* log_name) {
             return -1;
         }
         recv_left -= recv_byte;
-        //printf("send %s msg of size: %d, left: %d\n", log_name, recv_byte, recv_left); // test
+        //printf("send %s msg of size: %d, left: %u\n", log_name, recv_byte, recv_left); // test
         if (!recv_left) return total_size;
     }
 }
 
 
 // client: initializes data transfer, without built-in error recovery
-// supports only binary data (does not consider endianness)
+// supports only binary data (does not consider endianness) of size in range (0B, 2GiB)
 // returns send data size (-1 for failure)
 int TCP_send(const byte* data, unsigned total_size, const char* addr, const char* port) {
     // parse
-    if (!total_size || !data || !addr || !port || 
+    if (!total_size || (total_size & 0x80000000) || !data || !addr || !port || 
         strlen(addr) >= NET_MAX_STRING || strlen(port) >= NET_MAX_STRING) {
         fprintf(stderr, "ERROR: Invalid input!\n");
         return -1;
