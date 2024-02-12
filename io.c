@@ -12,7 +12,6 @@
 #endif
 
 #define _CRT_SECURE_NO_WARNINGS 1
-#define _CRT_SECURE_NO_DEPRECATE 1
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,7 +20,7 @@
 
 #ifdef _WIN32
     // https://stackoverflow.com/questions/21399650/
-    // <Windows.h> must be included after winsock
+    // <Windows.h> must be included after winsock2
     #include <winsock2.h>
     #include <windows.h>
     #include <ws2tcpip.h>
@@ -80,7 +79,7 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 // TCP send loop
 // size should be in range (0B, 2GiB)
 // returns total byte send, -1 for error (with socket cleanup)
-int send_data(socket_t socket, const byte* data, unsigned total_size, char* log_name) {
+int send_data(socket_t socket, const char* data, unsigned total_size, const char* log_name) {
     unsigned send_left = total_size;
     while(true) {
         int send_byte = send(socket, data+total_size-send_left, send_left, 0);
@@ -102,7 +101,7 @@ int send_data(socket_t socket, const byte* data, unsigned total_size, char* log_
 
 // TCP recv loop
 // returns total byte recv, -1 for error (with socket cleanup); data (pre allocated)
-int recv_data(socket_t socket, byte* data, unsigned total_size, char* log_name) {
+int recv_data(socket_t socket, char* data, unsigned total_size, const char* log_name) {
     unsigned recv_left = total_size;
     while(true) {
         int recv_byte = recv(socket, data+total_size-recv_left, recv_left, 0);
@@ -121,11 +120,41 @@ int recv_data(socket_t socket, byte* data, unsigned total_size, char* log_name) 
     }
 }
 
+// returns void as required by atexit
+static void wsa_cleanup()
+{
+    WSACleanup();
+}
+
+int TCP_win32_init()
+{
+    WORD version = MAKEWORD(2, 2);
+
+    WSADATA wsaData;
+    int err = WSAStartup(version, &wsaData);
+    if (err != 0) {
+        fprintf(stderr, "ERROR: WSAStartup failed with code %d", err);
+        return err;
+    }
+    if (wsaData.wVersion != version) {     
+        fprintf(stderr, "ERROR: Winsock 2.2 not available");
+        WSACleanup();
+        return -1;
+    }
+    if (atexit(wsa_cleanup) != 0) {        
+        fprintf(stderr, "ERROR: atexit registration failed");
+        WSACleanup();
+        return -1;
+    }
+
+    return 0;
+}
+
 
 // client: initializes data transfer, without built-in error recovery
 // supports only binary data (does not consider endianness) of size in range (0B, 2GiB)
 // returns send data size (-1 for failure)
-int TCP_send(const byte* data, unsigned total_size, const char* addr, const char* port) {
+int TCP_send(const char* data, unsigned total_size, const char* addr, const char* port) {
     // parse
     if (!total_size || (total_size & 0x80000000) || !data || !addr || !port || 
         strlen(addr) >= NET_MAX_STRING || strlen(port) >= NET_MAX_STRING) {
@@ -133,23 +162,12 @@ int TCP_send(const byte* data, unsigned total_size, const char* addr, const char
         return -1;
     }
 
-    #ifdef _WIN32
-        WSADATA wsaData;
-        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-            fprintf(stderr, "ERROR: WSAStartup failed!\n");
-            return -1;
-        }
-    #endif
-
     struct addrinfo hints, *server_info, *p;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC; // ipv4 & ipv6
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(addr, port, &hints, &server_info) != 0) {
         fprintf(stderr, "ERROR: Invalid addrinfo!\n");
-        #ifdef _WIN32
-            WSACleanup();
-        #endif
         return -1;
     }
 
@@ -173,9 +191,6 @@ int TCP_send(const byte* data, unsigned total_size, const char* addr, const char
     if (p == NULL) {
         fprintf(stderr, "ERROR: Connection failed!\n");
         freeaddrinfo(server_info);
-        #ifdef _WIN32
-            WSACleanup();
-        #endif
         return -1;
     }
     char host[NI_MAXHOST];
@@ -197,23 +212,16 @@ int TCP_send(const byte* data, unsigned total_size, const char* addr, const char
     char buffer[NET_MAX_CTRL];
     memset(buffer, 0, NET_MAX_CTRL);
     sprintf(buffer, "%u", total_size);
-    if (send_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initial") == -1) {
-        #ifdef _WIN32
-            WSACleanup();
-        #endif
+    if (send_data(client_socket, buffer, NET_MAX_CTRL, "Initial") == -1) {
         return -1;
     }
-    if (recv_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initial") == -1) {
-        #ifdef _WIN32
-            WSACleanup();
-        #endif
+    if (recv_data(client_socket, buffer, NET_MAX_CTRL, "Initial") == -1) {
         return -1;
     }
     if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
         fprintf(stderr, "ERROR: Initial message acknowledge failed!\n");
         #ifdef _WIN32
             closesocket(client_socket);
-            WSACleanup();
         #else
             close(client_socket);
         #endif
@@ -222,22 +230,15 @@ int TCP_send(const byte* data, unsigned total_size, const char* addr, const char
     
     // data msg
     if (send_data(client_socket, data, total_size, "Data") == -1) {
-        #ifdef _WIN32
-            WSACleanup();
-        #endif
         return -1;
     }
-    if (recv_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Data") == -1) {
-        #ifdef _WIN32
-            WSACleanup();
-        #endif
+    if (recv_data(client_socket, buffer, NET_MAX_CTRL, "Data") == -1) {
         return -1;
     }
     if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
         fprintf(stderr, "ERROR: Data message acknowledge failed!\n");
         #ifdef _WIN32
             closesocket(client_socket);
-            WSACleanup();
         #else
             close(client_socket);
         #endif
@@ -248,7 +249,6 @@ int TCP_send(const byte* data, unsigned total_size, const char* addr, const char
     printf("MESSAGE: Send succeeded.\n");
     #ifdef _WIN32
         closesocket(client_socket);
-        WSACleanup();
     #else
         close(client_socket);
     #endif
@@ -261,21 +261,13 @@ int TCP_send(const byte* data, unsigned total_size, const char* addr, const char
 // server: waits and accepts data transfer, with built-in error recovery
 // ipv6 enables ipv6 support. In some OS including Windows, this disables ipv4
 // returns recv data size (-1 for failure); data ptr (malloc)
-int TCP_recv(byte** data_ptr, const char* port, bool ipv6) {
+int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
     // parse
     if (!data_ptr || strlen(port) >= NET_MAX_STRING) {
        fprintf(stderr, "ERROR: Invalid input!\n");
         return -1;
     }
     *data_ptr = NULL;
-
-    #ifdef _WIN32
-        WSADATA wsaData;
-        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-            fprintf(stderr, "ERROR: WSAStartup failed!\n");
-            return -1;
-        }
-    #endif
 
     struct addrinfo hints, *server_info, *p;
     memset(&hints, 0, sizeof(hints));
@@ -285,9 +277,6 @@ int TCP_recv(byte** data_ptr, const char* port, bool ipv6) {
     hints.ai_flags = AI_PASSIVE;
     if (getaddrinfo(NULL, port, &hints, &server_info) != 0) {
         fprintf(stderr, "ERROR: Invalid addrinfo!\n");
-        #ifdef _WIN32
-            WSACleanup();
-        #endif
         return -1;
     }
 
@@ -311,9 +300,6 @@ int TCP_recv(byte** data_ptr, const char* port, bool ipv6) {
     if (p == NULL) {
         fprintf(stderr, "ERROR: Bind failed!\n");
         freeaddrinfo(server_info);
-        #ifdef _WIN32
-            WSACleanup();
-        #endif
         return -1;
     }
     if (listen(server_socket, 4) == -1) {
@@ -324,9 +310,6 @@ int TCP_recv(byte** data_ptr, const char* port, bool ipv6) {
             close(server_socket);
         #endif
         freeaddrinfo(server_info);
-        #ifdef _WIN32
-            WSACleanup();
-        #endif
         return -1;
     }
     char host[NI_MAXHOST];
@@ -338,7 +321,7 @@ int TCP_recv(byte** data_ptr, const char* port, bool ipv6) {
     freeaddrinfo(server_info);
 
     // TCP connection
-    byte* data = NULL;
+    char* data = NULL;
     struct timeval timer = {NET_TIMEOUT, 0};
     while(true) {
         if (data) free(data);
@@ -369,7 +352,7 @@ int TCP_recv(byte** data_ptr, const char* port, bool ipv6) {
         // init msg
         char buffer[NET_MAX_CTRL];
         memset(buffer, 0, NET_MAX_CTRL);
-        if (recv_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initial") == -1) continue;   
+        if (recv_data(client_socket, buffer, NET_MAX_CTRL, "Initial") == -1) continue;   
         unsigned total_size = atoi(buffer);
         if (!total_size) {
             fprintf(stderr, "ERROR: Initial message parse failed!\n");
@@ -380,23 +363,22 @@ int TCP_recv(byte** data_ptr, const char* port, bool ipv6) {
             #endif
             continue;
         }
-        data = (byte*)malloc(total_size);
+        data = (char*)malloc(total_size);
 
         strcpy(buffer, ACK_YES);
-        if (send_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Initial") == -1) continue;
+        if (send_data(client_socket, buffer, NET_MAX_CTRL, "Initial") == -1) continue;
 
         // data msg
         if (recv_data(client_socket, data, total_size, "Data") == -1) continue;
-        if (send_data(client_socket, (byte*)buffer, NET_MAX_CTRL, "Data") == -1) continue;
+        if (send_data(client_socket, buffer, NET_MAX_CTRL, "Data") == -1) continue;
 
         // close
-        byte temp[1];
+        char temp[1];
         if (recv(client_socket, temp, 1, 0) == 0) printf("MESSAGE: Receive succeeded.\n");
         else fprintf(stderr, "ERROR: Unknown!\n");
 
         #ifdef _WIN32
             closesocket(server_socket);
-            WSACleanup();
         #else
             close(server_socket);
         #endif
@@ -405,77 +387,4 @@ int TCP_recv(byte** data_ptr, const char* port, bool ipv6) {
         *data_ptr = data;
         return total_size;
     }
-}
-
-
-/*
-typedef struct BITMAPFILE { // in little-endian
-    // bmp file header
-    ushort      bfType;          // type: "BM" (0-1)
-    unsigned    bfSize;          // bmp file size (2-5)
-    ushort      bfReserved1;     // reserved, 0 (6-7)
-    ushort      bfReserved2;     // reserved, 0 (8-9)
-    unsigned    bfOffBits;       // pixel bits offset, usually 54 (10-13)
-
-    // bmp info header
-    unsigned    biSize;          // bmp info header size, 40 (14-17)
-    unsigned    biWidth;         // image width  (18-21)
-    unsigned    biHeight;        // image height  (22-25)
-    ushort      biPlanes;        // target color plane, usually 1 (26-27)
-    ushort      biBitCount;      // color depth of all channels (28-29)
-    unsigned    biCompression;   // compression, usually 0 (30-33)
-    unsigned    biSizeImage;     // image size including padding, uncompressed could use 0 (34-37)
-    unsigned    biXPelsPerMeter; // horizontal pixel density, usually 0 (38-41)
-    unsigned    biYPelsPerMeter; // vertical pixel density, usually 0 (42-45)
-    unsigned    biClrUsed;       // color used, usually 0 (46-49)
-    unsigned    biClrImportant;  // important color, usually 0 (50-53)
-
-    // color palette (unused if biBitCount > 8, which is 256 color)
-    //byte        rgbBlue;
-    //byte        rgbGreen;
-    //byte        rgbRed;
-    //byte        rgbReserved;
-} bmp_header;
-*/
-// if board does not support stbi, we can try to use this
-bool write_bmp_old(const byte* pixelBuf, int width, int height, const char* filename) {
-    // assume pixelBuf is top left and uses true color (24b)
-
-    int rowSize = (width * 3 + 3) & ~3;
-    int bfSize = 54 + rowSize * height;
-
-    byte header[54] = {
-        // bmp file header
-        'B', 'M',    // bfType
-        bfSize, bfSize >> 8, bfSize >> 16, bfSize >> 24, // bfSize
-        0, 0,        // bfReserved1
-        0, 0,        // bfReserved2
-        54, 0, 0, 0, // bfOffBits
-
-        // bmp info header
-        40, 0, 0, 0, // biSize
-        width, width >> 8, width >> 16, width >> 24, // biWidth
-        height, height >> 8, height >> 16, height >> 24, // biHeight
-        1, 0,        // biPlanes
-        24, 0,       // biBitCount
-        0, 0, 0, 0,  // biCompression
-        0, 0, 0, 0,  // biSizeImage
-        0, 0, 0, 0,  // biXPelsPerMeter
-        0, 0, 0, 0,  // biYPelsPerMeter
-        0, 0, 0, 0,  // biClrUsed
-        0, 0, 0, 0   // biClrImportant
-    };
-
-    FILE* fd;
-    fd = fopen(filename, "wb");
-    if (!fd) return false;
-
-    fwrite(header, 1, 54, fd);
-    for (int h = height - 1; h >= 0; h--) {
-        fwrite(pixelBuf + h * width * 3, 1, width * 3, fd);
-        fwrite((char[]) { 0, 0, 0 }, 1, rowSize - width * 3, fd); // Padding
-    }
-
-    fclose(fd);
-    return true;
 }

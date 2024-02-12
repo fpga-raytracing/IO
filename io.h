@@ -21,15 +21,24 @@ bool write_bmp(const char* filename, const void* data, int width, int height, in
 bool write_png(const char* filename, const void* data, int width, int height, int channels);
 
 
+#ifdef _WIN32
+// Initialize TCP on Windows.
+// Must only be called once ever unless it fails.
+// If you violate this, weird things might happen.
+int TCP_win32_init();
+#endif
+
 // client: initializes data transfer, without built-in error recovery
 // supports only binary data (does not consider endianness) of size in range (0B, 2GiB)
 // returns send data size (-1 for failure)
-int TCP_send(const unsigned char* data, unsigned total_size, const char* addr, const char* port);
+int TCP_send(const char* data, unsigned total_size, const char* addr, const char* port);
 
 // server: waits and accepts data transfer, with built-in error recovery
 // ipv6 enables ipv6 support. In some OS including Windows, this disables ipv4
 // returns recv data size (-1 for failure); data ptr (malloc)
-int TCP_recv(unsigned char** data_ptr, const char* port, bool ipv6);
+int TCP_recv(char** data_ptr, const char* port, bool ipv6);
+
+
 
 
 // TCP_send() example
