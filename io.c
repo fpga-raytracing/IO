@@ -120,6 +120,7 @@ int recv_data(socket_t socket, char* data, unsigned total_size, const char* log_
     }
 }
 
+#ifdef _WIN32
 // returns void as required by atexit
 static void wsa_cleanup()
 {
@@ -149,6 +150,7 @@ int TCP_win32_init()
 
     return 0;
 }
+#endif
 
 
 // client: initializes data transfer, without built-in error recovery
