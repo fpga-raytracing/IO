@@ -68,6 +68,13 @@ int main(int argc, char *argv[]) {
     printf("read filename: %s\n", argv[3]);
     printf("read size: %d\n", total_size);
 
+    int init = TCP_win32_init();
+    if (init != 0) {
+        fprintf(stderr, "Windows initialize function failed!\n");
+        exit(1);
+    }
+
+    // send in retry loop
     int result;
     for (int i = 0; i < 3; i++) {
         printf("\n");
@@ -111,8 +118,13 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    byte* data;
+    char* data;
     printf("\n");
+    int init = TCP_win32_init();
+    if (init != 0) {
+        fprintf(stderr, "Windows initialize function failed!\n");
+        exit(1);
+    }
     int size = TCP_recv(&data, argv[2], ipv6);
     printf("\n");
     if (size == -1) {

@@ -50,9 +50,6 @@
 #define ACK_YES "yes"
 #define ACK_NO "no"
 
-typedef unsigned short ushort;
-typedef unsigned char byte;
-
 #ifdef _WIN32
 typedef SOCKET socket_t;
 #else
