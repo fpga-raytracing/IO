@@ -3,14 +3,10 @@
 // Anything here must work on both Windows and Linux.
 //
 
-// def here to avoid messing with cpp files' WINNT.
-// this is very old! winxp. 
-//#ifdef _WIN32
-//    // for ws2tcpip.h
-//    #ifndef _WIN32_WINNT
-//        #define _WIN32_WINNT 0x501
-//    #endif
-//#endif
+#if defined(__MINGW32__) && !defined(_WIN32_WINNT)
+// mingw bug. for ws2tcpip.h
+#define _WIN32_WINNT 0x501
+#endif
 
 #define _CRT_SECURE_NO_WARNINGS 1
 
@@ -19,7 +15,7 @@
     #include <windows.h>
     #include <winsock2.h>
     #include <ws2tcpip.h>
-    // does not work in mingw-gcc, add -lws2_32 to linker
+    // does not work in mingw, add -lws2_32 to linker manually
     #pragma comment(lib, "ws2_32.lib")
 #else
     #include <unistd.h>
