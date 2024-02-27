@@ -4,25 +4,20 @@
 //
 
 // def here to avoid messing with cpp files' WINNT.
-#ifdef _WIN32
-    // for ws2tcpip.h
-    #ifndef _WIN32_WINNT
-        #define _WIN32_WINNT 0x501
-    #endif
-#endif
+// this is very old! winxp. 
+//#ifdef _WIN32
+//    // for ws2tcpip.h
+//    #ifndef _WIN32_WINNT
+//        #define _WIN32_WINNT 0x501
+//    #endif
+//#endif
 
 #define _CRT_SECURE_NO_WARNINGS 1
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <string.h>
-
 #ifdef _WIN32
-    // https://stackoverflow.com/questions/21399650/
-    // <Windows.h> must be included after winsock2
-    #include <winsock2.h>
+    #define WIN32_LEAN_AND_MEAN
     #include <windows.h>
+    #include <winsock2.h>
     #include <ws2tcpip.h>
     // does not work in mingw-gcc, add -lws2_32 to linker
     #pragma comment(lib, "ws2_32.lib")
@@ -31,6 +26,11 @@
     #include <sys/socket.h>
     #include <netdb.h>
 #endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION 1
 #include "stb_image_write.h"
@@ -52,8 +52,13 @@
 
 #ifdef _WIN32
 typedef SOCKET socket_t;
+#define INV_SOCKET INVALID_SOCKET
+#define CLOSE_SOCKET closesocket
+
 #else
 typedef int socket_t;
+#define INV_SOCKET (-1)
+#define CLOSE_SOCKET close
 #endif
 
 bool write_bmp(const char* filename, const void* data, int width, int height, int channels) {
@@ -82,11 +87,7 @@ int send_data(socket_t socket, const char* data, unsigned total_size, const char
         int send_byte = send(socket, data+total_size-send_left, send_left, 0);
         if (send_byte == -1) {
             fprintf(stderr, "ERROR: %s message send failed!\n", log_name);
-            #ifdef _WIN32
-                closesocket(socket);
-            #else
-                close(socket);
-            #endif
+            CLOSE_SOCKET(socket);
             return -1;
         }
         send_left -= send_byte;
@@ -104,11 +105,7 @@ int recv_data(socket_t socket, char* data, unsigned total_size, const char* log_
         int recv_byte = recv(socket, data+total_size-recv_left, recv_left, 0);
         if (recv_byte < 1) {
             fprintf(stderr, "ERROR: %s message receive failed!\n", log_name);
-            #ifdef _WIN32
-                closesocket(socket);
-            #else
-                close(socket);
-            #endif
+            CLOSE_SOCKET(socket);
             return -1;
         }
         recv_left -= recv_byte;
@@ -118,8 +115,8 @@ int recv_data(socket_t socket, char* data, unsigned total_size, const char* log_
 }
 
 #ifdef _WIN32
-// returns void as required by atexit
-static void wsa_cleanup()
+// void(*)(void) as required by atexit
+static void wsa_cleanup(void)
 {
     WSACleanup();
 }
@@ -174,17 +171,9 @@ int TCP_send(const char* data, unsigned total_size, const char* addr, const char
     socket_t client_socket;
     for (p = server_info; p != NULL; p = p->ai_next) {
         client_socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-        #ifdef _WIN32
-            if (client_socket == INVALID_SOCKET) continue;
-        #else
-            if (client_socket == -1) continue;
-        #endif
+        if (client_socket == INV_SOCKET) continue;
         if (connect(client_socket, p->ai_addr, (socklen_t)p->ai_addrlen) != -1) break;
-        #ifdef _WIN32
-            closesocket(client_socket);
-        #else
-            close(client_socket);
-        #endif
+        CLOSE_SOCKET(client_socket);
         break;
     }
     if (p == NULL) {
@@ -219,11 +208,7 @@ int TCP_send(const char* data, unsigned total_size, const char* addr, const char
     }
     if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
         fprintf(stderr, "ERROR: Initial message acknowledge failed!\n");
-        #ifdef _WIN32
-            closesocket(client_socket);
-        #else
-            close(client_socket);
-        #endif
+        CLOSE_SOCKET(client_socket);
         return -1;
     }
     
@@ -236,21 +221,13 @@ int TCP_send(const char* data, unsigned total_size, const char* addr, const char
     }
     if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
         fprintf(stderr, "ERROR: Data message acknowledge failed!\n");
-        #ifdef _WIN32
-            closesocket(client_socket);
-        #else
-            close(client_socket);
-        #endif
+        CLOSE_SOCKET(client_socket);
         return -1;
     }
 
     // close
     printf("MESSAGE: Send succeeded.\n");
-    #ifdef _WIN32
-        closesocket(client_socket);
-    #else
-        close(client_socket);
-    #endif
+    CLOSE_SOCKET(client_socket);
     printf("MESSAGE: Connection closed.\n");
 
     return total_size;
@@ -263,7 +240,7 @@ int TCP_send(const char* data, unsigned total_size, const char* addr, const char
 int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
     // parse
     if (!data_ptr || strlen(port) >= NET_MAX_STRING) {
-       fprintf(stderr, "ERROR: Invalid input!\n");
+        fprintf(stderr, "ERROR: Invalid input!\n");
         return -1;
     }
     *data_ptr = NULL;
@@ -283,17 +260,9 @@ int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
     socket_t server_socket;
     for (p = server_info; p != NULL; p = p->ai_next) {
         server_socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-        #ifdef _WIN32
-            if (server_socket == INVALID_SOCKET) continue;
-        #else
-            if (server_socket == -1) continue;
-        #endif
+        if (server_socket == INV_SOCKET) continue;
         if (bind(server_socket, p->ai_addr, (socklen_t)p->ai_addrlen) != -1) break;
-        #ifdef _WIN32
-            closesocket(server_socket);
-        #else
-            close(server_socket);
-        #endif
+        CLOSE_SOCKET(server_socket);
         break;
     }
     if (p == NULL) {
@@ -303,11 +272,7 @@ int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
     }
     if (listen(server_socket, 4) == -1) {
         fprintf(stderr, "ERROR: Listen failed!\n");
-        #ifdef _WIN32
-            closesocket(server_socket);
-        #else
-            close(server_socket);
-        #endif
+        CLOSE_SOCKET(server_socket);
         freeaddrinfo(server_info);
         return -1;
     }
@@ -328,11 +293,7 @@ int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
         socklen_t client_len = sizeof(client_addr);
         socket_t client_socket = accept(server_socket, (struct sockaddr*) &client_addr, &client_len);
 
-        #ifdef _WIN32
-            if (client_socket == INVALID_SOCKET)
-        #else
-            if (client_socket == -1)
-        #endif
+        if (client_socket == INV_SOCKET)
         {
             fprintf(stderr, "ERROR: Accept failed!\n");
             continue;
@@ -355,11 +316,7 @@ int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
         unsigned total_size = atoi(buffer);
         if (!total_size) {
             fprintf(stderr, "ERROR: Initial message parse failed!\n");
-            #ifdef _WIN32
-                closesocket(client_socket);
-            #else
-                close(client_socket);
-            #endif
+            CLOSE_SOCKET(client_socket);
             continue;
         }
         data = (char*)malloc(total_size);
@@ -376,11 +333,7 @@ int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
         if (recv(client_socket, temp, 1, 0) == 0) printf("MESSAGE: Receive succeeded.\n");
         else fprintf(stderr, "ERROR: Unknown!\n");
 
-        #ifdef _WIN32
-            closesocket(server_socket);
-        #else
-            close(server_socket);
-        #endif
+        CLOSE_SOCKET(server_socket);
         printf("MESSAGE: Connection closed.\n");
 
         *data_ptr = data;
