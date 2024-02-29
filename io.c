@@ -41,6 +41,14 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
+bool write_bmp(const char* filename, const void* data, int width, int height, int channels) {
+    return stbi_write_bmp(filename, width, height, channels, data);
+}
+
+bool write_png(const char* filename, const void* data, int width, int height, int channels) {
+    return stbi_write_png(filename, width, height, channels, data, 0);
+}
+
 #define NET_TIMEOUT 5 // in seconds
 #define NET_MAX_CTRL 64 // 11 is enough, reserved for other control commands
 #define ACK_YES "yes"
@@ -56,15 +64,6 @@ typedef int socket_t;
 #define INV_SOCKET (-1)
 #define CLOSE_SOCKET close
 #endif
-
-bool write_bmp(const char* filename, const void* data, int width, int height, int channels) {
-    return stbi_write_bmp(filename, width, height, channels, data);
-}
-
-bool write_png(const char* filename, const void* data, int width, int height, int channels) {
-    return stbi_write_png(filename, width, height, channels, data, 0);
-}
-
 
 /*
     protocol:
@@ -170,7 +169,6 @@ int TCP_send(const char* data, unsigned total_size, const char* addr, const char
         if (client_socket == INV_SOCKET) continue;
         if (connect(client_socket, p->ai_addr, (socklen_t)p->ai_addrlen) != -1) break;
         CLOSE_SOCKET(client_socket);
-        break;
     }
     if (p == NULL) {
         fprintf(stderr, "ERROR: Connection failed!\n");
@@ -259,7 +257,6 @@ int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
         if (server_socket == INV_SOCKET) continue;
         if (bind(server_socket, p->ai_addr, (socklen_t)p->ai_addrlen) != -1) break;
         CLOSE_SOCKET(server_socket);
-        break;
     }
     if (p == NULL) {
         fprintf(stderr, "ERROR: Bind failed!\n");
