@@ -25,7 +25,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION 1
@@ -54,17 +53,6 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 #define ACK_YES "yes"
 #define ACK_NO "no"
 
-#ifdef _WIN32
-typedef SOCKET socket_t;
-#define INV_SOCKET INVALID_SOCKET
-#define CLOSE_SOCKET closesocket
-
-#else
-typedef int socket_t;
-#define INV_SOCKET (-1)
-#define CLOSE_SOCKET close
-#endif
-
 /*
     protocol:
     init: total_size
@@ -72,6 +60,18 @@ typedef int socket_t;
     ack: ACK_YES
 */
 
+void TCP_close(socket_t socket)
+{
+#ifdef _WIN32
+    int ret = closesocket(socket);
+#else
+    int ret = close(socket);
+#endif
+    if (ret != 0) {
+        // cannot retry a close, just log it
+        fprintf(stderr, "ERROR: Failed to close socket!\n");
+    }
+}
 
 // TCP send loop
 // size should be in range (0B, 2GiB)
@@ -82,7 +82,7 @@ int send_data(socket_t socket, const char* data, unsigned total_size, const char
         int send_byte = send(socket, data+total_size-send_left, send_left, 0);
         if (send_byte == -1) {
             fprintf(stderr, "ERROR: %s message send failed!\n", log_name);
-            CLOSE_SOCKET(socket);
+            TCP_close(socket);
             return -1;
         }
         send_left -= send_byte;
@@ -100,7 +100,7 @@ int recv_data(socket_t socket, char* data, unsigned total_size, const char* log_
         int recv_byte = recv(socket, data+total_size-recv_left, recv_left, 0);
         if (recv_byte < 1) {
             fprintf(stderr, "ERROR: %s message receive failed!\n", log_name);
-            CLOSE_SOCKET(socket);
+            TCP_close(socket);
             return -1;
         }
         recv_left -= recv_byte;
@@ -141,25 +141,21 @@ int TCP_win32_init()
 }
 #endif
 
-
-// client: initializes data transfer, without built-in error recovery
-// supports only binary data (does not consider endianness) of size in range (0B, 2GiB)
-// returns send data size (-1 for failure)
-int TCP_send(const char* data, unsigned total_size, const char* addr, const char* port) {
+socket_t TCP_connect2(const char* addr, const char* port, bool verbose)
+{
     // parse
-    if (!total_size || (total_size & 0x80000000) || !data || !addr || !port || 
-        strlen(addr) >= NET_MAX_STRING || strlen(port) >= NET_MAX_STRING) {
+    if (!addr || !port || strlen(addr) >= NET_MAX_STRING || strlen(port) >= NET_MAX_STRING) {
         fprintf(stderr, "ERROR: Invalid input!\n");
-        return -1;
+        return INV_SOCKET;
     }
 
-    struct addrinfo hints, *server_info, *p;
+    struct addrinfo hints, * server_info, * p;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC; // ipv4 & ipv6
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(addr, port, &hints, &server_info) != 0) {
         fprintf(stderr, "ERROR: Invalid addrinfo!\n");
-        return -1;
+        return INV_SOCKET;
     }
 
     // connect
@@ -168,78 +164,86 @@ int TCP_send(const char* data, unsigned total_size, const char* addr, const char
         client_socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (client_socket == INV_SOCKET) continue;
         if (connect(client_socket, p->ai_addr, (socklen_t)p->ai_addrlen) != -1) break;
-        CLOSE_SOCKET(client_socket);
+        TCP_close(client_socket);
     }
     if (p == NULL) {
         fprintf(stderr, "ERROR: Connection failed!\n");
         freeaddrinfo(server_info);
-        return -1;
+        return INV_SOCKET;
     }
-    char host[NI_MAXHOST];
-    char service[NI_MAXSERV];
-    if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
-        NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
-        printf("MESSAGE: Outgoing connection to addr: %s port: %s.\n", host, service);
-    else fprintf(stderr, "WARNING: server getnameinfo failed!\n");
-    printf("MESSAGE: Send start.\n");
+
+    if (verbose) {
+        char host[NI_MAXHOST];
+        char service[NI_MAXSERV];
+        if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
+            NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
+            printf("MESSAGE: Established connection to addr: %s port: %s.\n", host, service);
+        else fprintf(stderr, "WARNING: server getnameinfo failed!\n");    
+    }
+
     freeaddrinfo(server_info);
 
     // inactivity timer
-    struct timeval timer = {NET_TIMEOUT, 0};
-    if (setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, (char* ) &timer, sizeof(timer)) == -1) {
-        fprintf(stderr, "WARNING: Inactivity timer failed!\n");
+    struct timeval timer = { NET_TIMEOUT, 0 };
+    if (setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, (char*)&timer, sizeof(timer)) == -1) {
+        fprintf(stderr, "WARNING: Connect inactivity timer failed!\n");
     }
+
+    return client_socket;
+}
+
+int TCP_send2(socket_t socket, const char* data, unsigned total_size, bool verbose) {
+    
+    if (!total_size || (total_size & 0x80000000) || !data) {
+        fprintf(stderr, "ERROR: Invalid input!\n");
+        return -1;
+    }
+
+    if (verbose) printf("MESSAGE: Send start.\n");
 
     // init msg
     char buffer[NET_MAX_CTRL];
     memset(buffer, 0, NET_MAX_CTRL);
     sprintf(buffer, "%u", total_size);
-    if (send_data(client_socket, buffer, NET_MAX_CTRL, "Initial") == -1) {
+    if (send_data(socket, buffer, NET_MAX_CTRL, "Initial") == -1) {
         return -1;
     }
-    if (recv_data(client_socket, buffer, NET_MAX_CTRL, "Initial") == -1) {
+    if (recv_data(socket, buffer, NET_MAX_CTRL, "Initial") == -1) {
         return -1;
     }
     if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
         fprintf(stderr, "ERROR: Initial message acknowledge failed!\n");
-        CLOSE_SOCKET(client_socket);
+        TCP_close(socket);
         return -1;
     }
     
     // data msg
-    if (send_data(client_socket, data, total_size, "Data") == -1) {
+    if (send_data(socket, data, total_size, "Data") == -1) {
         return -1;
     }
-    if (recv_data(client_socket, buffer, NET_MAX_CTRL, "Data") == -1) {
+    if (recv_data(socket, buffer, NET_MAX_CTRL, "Data") == -1) {
         return -1;
     }
     if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
         fprintf(stderr, "ERROR: Data message acknowledge failed!\n");
-        CLOSE_SOCKET(client_socket);
+        TCP_close(socket);
         return -1;
     }
 
-    // close
-    printf("MESSAGE: Send succeeded.\n");
-    CLOSE_SOCKET(client_socket);
-    printf("MESSAGE: Connection closed.\n");
+    if (verbose) printf("MESSAGE: Sent %d bytes successfully\n", total_size);
 
     return total_size;
 }
 
-
-// server: waits and accepts data transfer, with built-in error recovery
-// ipv6 enables ipv6 support. In some OS including Windows, this disables ipv4
-// returns recv data size (-1 for failure); data ptr (malloc)
-int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
+socket_t TCP_listen2(const char* port, bool ipv6, bool verbose)
+{
     // parse
-    if (!data_ptr || strlen(port) >= NET_MAX_STRING) {
+    if (strlen(port) >= NET_MAX_STRING) {
         fprintf(stderr, "ERROR: Invalid input!\n");
-        return -1;
+        return INV_SOCKET;
     }
-    *data_ptr = NULL;
 
-    struct addrinfo hints, *server_info, *p;
+    struct addrinfo hints, * server_info, * p;
     memset(&hints, 0, sizeof(hints));
     if (ipv6) hints.ai_family = AF_INET6;
     else hints.ai_family = AF_INET;
@@ -247,7 +251,7 @@ int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
     hints.ai_flags = AI_PASSIVE;
     if (getaddrinfo(NULL, port, &hints, &server_info) != 0) {
         fprintf(stderr, "ERROR: Invalid addrinfo!\n");
-        return -1;
+        return INV_SOCKET;
     }
 
     // bind & listen
@@ -256,80 +260,121 @@ int TCP_recv(char** data_ptr, const char* port, bool ipv6) {
         server_socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (server_socket == INV_SOCKET) continue;
         if (bind(server_socket, p->ai_addr, (socklen_t)p->ai_addrlen) != -1) break;
-        CLOSE_SOCKET(server_socket);
+        TCP_close(server_socket);
     }
     if (p == NULL) {
         fprintf(stderr, "ERROR: Bind failed!\n");
         freeaddrinfo(server_info);
-        return -1;
+        return INV_SOCKET;
     }
     if (listen(server_socket, 4) == -1) {
         fprintf(stderr, "ERROR: Listen failed!\n");
-        CLOSE_SOCKET(server_socket);
+        TCP_close(server_socket);
         freeaddrinfo(server_info);
-        return -1;
+        return INV_SOCKET;
     }
-    char host[NI_MAXHOST];
-    char service[NI_MAXSERV];
-    if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
-        NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
-        printf("MESSAGE: Start to listen on addr: %s port: %s.\n", host, service);
-    else fprintf(stderr, "WARNING: Server getnameinfo failed!\n");
+
+    if (verbose) {
+        char host[NI_MAXHOST];
+        char service[NI_MAXSERV];
+        if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
+            NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
+            printf("MESSAGE: Start to listen on addr: %s port: %s.\n", host, service);
+        else fprintf(stderr, "WARNING: Server getnameinfo failed!\n");
+    }
+    
     freeaddrinfo(server_info);
 
-    // TCP connection
-    char* data = NULL;
-    struct timeval timer = {NET_TIMEOUT, 0};
-    while(true) {
-        if (data) free(data);
-        struct sockaddr_storage client_addr;
-        socklen_t client_len = sizeof(client_addr);
-        socket_t client_socket = accept(server_socket, (struct sockaddr*) &client_addr, &client_len);
+    return server_socket;
+}
 
-        if (client_socket == INV_SOCKET)
-        {
-            fprintf(stderr, "ERROR: Accept failed!\n");
-            continue;
-        }
-        if (getnameinfo((struct sockaddr*)&client_addr, sizeof(struct sockaddr_storage), host, 
-            NI_MAXHOST, service, NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
-            printf("MESSAGE: Incoming connection from addr: %s port: %s.\n", host, service);
-        else fprintf(stderr, "WARNING: Client getnameinfo failed!\n");
-        printf("MESSAGE: Receive start.\n");
+socket_t TCP_accept2(socket_t socket, bool verbose)
+{
+    struct timeval timer = { NET_TIMEOUT, 0 };
 
-        // inactivity timer
-        if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char* ) &timer, sizeof(timer)) == -1) {
-            fprintf(stderr, "WARNING: Inactivity timer failed!\n");
-        }
+    struct sockaddr_storage client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    socket_t client_socket = accept(socket, (struct sockaddr*)&client_addr, &client_len);
 
-        // init msg
-        char buffer[NET_MAX_CTRL];
-        memset(buffer, 0, NET_MAX_CTRL);
-        if (recv_data(client_socket, buffer, NET_MAX_CTRL, "Initial") == -1) continue;   
-        unsigned total_size = atoi(buffer);
-        if (!total_size) {
-            fprintf(stderr, "ERROR: Initial message parse failed!\n");
-            CLOSE_SOCKET(client_socket);
-            continue;
-        }
-        data = (char*)malloc(total_size);
-
-        strcpy(buffer, ACK_YES);
-        if (send_data(client_socket, buffer, NET_MAX_CTRL, "Initial") == -1) continue;
-
-        // data msg
-        if (recv_data(client_socket, data, total_size, "Data") == -1) continue;
-        if (send_data(client_socket, buffer, NET_MAX_CTRL, "Data") == -1) continue;
-
-        // close
-        char temp[1];
-        if (recv(client_socket, temp, 1, 0) == 0) printf("MESSAGE: Receive succeeded.\n");
-        else fprintf(stderr, "ERROR: Unknown!\n");
-
-        CLOSE_SOCKET(server_socket);
-        printf("MESSAGE: Connection closed.\n");
-
-        *data_ptr = data;
-        return total_size;
+    if (client_socket == INV_SOCKET)
+    {
+        fprintf(stderr, "ERROR: Accept failed!\n");
+        return INV_SOCKET;
     }
+    if (verbose) {
+        char host[NI_MAXHOST];
+        char service[NI_MAXSERV];
+        if (getnameinfo((struct sockaddr*)&client_addr, sizeof(struct sockaddr_storage), host,
+            NI_MAXHOST, service, NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
+            printf("MESSAGE: Accepted connection from addr: %s port: %s.\n", host, service);
+        else fprintf(stderr, "WARNING: Client getnameinfo failed!\n");
+    }
+
+    // inactivity timer
+    if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char*)&timer, sizeof(timer)) == -1) {
+        fprintf(stderr, "WARNING: Accept inactivity timer failed!\n");
+    }
+
+    return client_socket;
+}
+
+int TCP_recv2(socket_t socket, char** data_ptr, bool verbose) 
+{
+    if (!data_ptr) {
+        fprintf(stderr, "ERROR: Invalid input!\n");
+        return -1;
+    }
+    *data_ptr = NULL;
+
+    char* data = NULL;   
+    if (verbose) printf("MESSAGE: Receive start.\n");
+
+    // init msg
+    char buffer[NET_MAX_CTRL];
+    memset(buffer, 0, NET_MAX_CTRL);
+    if (recv_data(socket, buffer, NET_MAX_CTRL, "Initial") == -1) return -1;
+    unsigned total_size = atoi(buffer);
+    if (!total_size) {
+        fprintf(stderr, "ERROR: Initial message parse failed!\n");
+        TCP_close(socket);
+        return -1;
+    }
+    data = (char*)malloc(total_size);
+
+    strcpy(buffer, ACK_YES);
+    if (send_data(socket, buffer, NET_MAX_CTRL, "Initial") == -1) return -1;
+
+    // data msg
+    if (recv_data(socket, data, total_size, "Data") == -1) return -1;
+    if (send_data(socket, buffer, NET_MAX_CTRL, "Data") == -1) return -1;
+
+    // close
+    char temp[1];
+    if (recv(socket, temp, 1, 0) == 0) {
+        if (verbose) printf("MESSAGE: Receive succeeded.\n");
+    }
+    else fprintf(stderr, "ERROR: Unknown!\n");
+
+    *data_ptr = data;
+    return total_size;
+}
+
+socket_t TCP_connect(const char* addr, const char* port) {
+    return TCP_connect2(addr, port, false);
+}
+
+socket_t TCP_listen(const char* port, bool ipv6) {
+    return TCP_listen2(port, ipv6, false);
+}
+
+socket_t TCP_accept(socket_t socket) {
+    return TCP_accept2(socket, false);
+}
+
+int TCP_send(socket_t socket, const char* data, unsigned total_size) {
+    return TCP_send2(socket, data, total_size, false);
+}
+
+int TCP_recv(socket_t socket, char** data_ptr) {
+    return TCP_recv2(socket, data_ptr, false);
 }

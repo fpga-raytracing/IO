@@ -6,11 +6,11 @@
 #ifndef IO_H
 #define IO_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define NET_MAX_STRING 40 // max input string, for security
 
 // Write .bmp. Faster to write but produces larger files.
 // Channels = 3 for RGB, 4 for RGBA.
@@ -21,6 +21,24 @@ bool write_bmp(const char* filename, const void* data, int width, int height, in
 bool write_png(const char* filename, const void* data, int width, int height, int channels);
 
 
+#define NET_MAX_STRING 40 // max input string, for security
+
+// Define these types manually to avoid including
+// noisy Windows headers that mess up C++ compile
+#ifdef _WIN64
+typedef unsigned __int64 socket_t;
+#define INV_SOCKET (socket_t)(~0)
+
+#elif defined(_WIN32)
+typedef unsigned int socket_t;
+#define INV_SOCKET (socket_t)(~0)
+
+#else
+typedef int socket_t;
+#define INV_SOCKET (-1)
+#endif
+
+
 #ifdef _WIN32
 // Initialize TCP on Windows.
 // Must only be called once ever unless it fails.
@@ -28,16 +46,46 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 int TCP_win32_init();
 #endif
 
+// Client: Connect to server listening at addr, port.
+// Returns new socket (INV_SOCKET on failure).
+socket_t TCP_connect(const char* addr, const char* port);
+
+// Server: Start listening for all connections at this port.
+// ipv6 enables ipv6 support. In some OS including Windows, this disables ipv4.
+// Returns listening socket (INV_SOCKET on failure).
+// Call accept after this to get a socket on which data can be sent/recvd.
+socket_t TCP_listen(const char* port, bool ipv6);
+
+// Server: Accept a pending connection at this listening socket.
+// Returns new socket (INV_SOCKET on failure).
+socket_t TCP_accept(socket_t socket);
+
 // client: initializes data transfer, without built-in error recovery
 // supports only binary data (does not consider endianness) of size in range (0B, 2GiB)
 // returns send data size (-1 for failure)
-int TCP_send(const char* data, unsigned total_size, const char* addr, const char* port);
+int TCP_send(socket_t socket, const char* data, unsigned total_size);
 
 // server: waits and accepts data transfer, with built-in error recovery
-// ipv6 enables ipv6 support. In some OS including Windows, this disables ipv4
 // returns recv data size (-1 for failure); data ptr (malloc)
-int TCP_recv(char** data_ptr, const char* port, bool ipv6);
+int TCP_recv(socket_t socket, char** data_ptr);
 
+// Close socket.
+void TCP_close(socket_t socket);
+
+// TCP_connect with optional verbose mode.
+socket_t TCP_connect2(const char* addr, const char* port, bool verbose);
+
+// TCP_listen with optional verbose mode.
+socket_t TCP_listen2(const char* port, bool ipv6, bool verbose);
+
+// TCP_accept with optional verbose mode.
+socket_t TCP_accept2(socket_t socket, bool verbose);
+
+// TCP_send with optional verbose mode.
+int TCP_send2(socket_t socket, const char* data, unsigned total_size, bool verbose);
+
+// TCP_recv with optional verbose mode.
+int TCP_recv2(socket_t socket, char** data_ptr, bool verbose);
 
 
 
