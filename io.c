@@ -21,6 +21,7 @@
     #include <unistd.h>
     #include <sys/socket.h>
     #include <netdb.h>
+    #include <errno.h>
 #endif
 
 #include <stdio.h>
@@ -48,10 +49,16 @@ bool write_png(const char* filename, const void* data, int width, int height, in
     return stbi_write_png(filename, width, height, channels, data, 0);
 }
 
-#define NET_TIMEOUT 5 // in seconds
+#define NET_TIMEOUT 30 // in seconds
 #define NET_MAX_CTRL 64 // 11 is enough, reserved for other control commands
 #define ACK_YES "yes"
 #define ACK_NO "no"
+
+#ifdef _WIN32
+#define TCP_ERRNO WSAGetLastError()
+#else
+#define TCP_ERRNO errno
+#endif
 
 /*
     protocol:
@@ -69,7 +76,7 @@ void TCP_close(socket_t socket)
 #endif
     if (ret != 0) {
         // cannot retry a close, just log it
-        fprintf(stderr, "ERROR: Failed to close socket!\n");
+        fprintf(stderr, "ERROR: Failed to close socket with err %d\n", TCP_ERRNO);
     }
 }
 
@@ -81,7 +88,7 @@ int send_data(socket_t socket, const char* data, unsigned total_size, const char
     while(true) {
         int send_byte = send(socket, data+total_size-send_left, send_left, 0);
         if (send_byte == -1) {
-            fprintf(stderr, "ERROR: %s message send failed!\n", log_name);
+            fprintf(stderr, "ERROR: %s message send failed with err %d\n", log_name, TCP_ERRNO);
             TCP_close(socket);
             return -1;
         }
@@ -99,7 +106,7 @@ int recv_data(socket_t socket, char* data, unsigned total_size, const char* log_
     while(true) {
         int recv_byte = recv(socket, data+total_size-recv_left, recv_left, 0);
         if (recv_byte < 1) {
-            fprintf(stderr, "ERROR: %s message receive failed!\n", log_name);
+            fprintf(stderr, "ERROR: %s message receive failed with err %d\n", log_name, TCP_ERRNO);
             TCP_close(socket);
             return -1;
         }
@@ -175,10 +182,11 @@ socket_t TCP_connect2(const char* addr, const char* port, bool verbose)
     if (verbose) {
         char host[NI_MAXHOST];
         char service[NI_MAXSERV];
-        if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
-            NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
+        int err = getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
+            NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV);
+        if (err == 0)
             printf("MESSAGE: Established connection to addr: %s port: %s.\n", host, service);
-        else fprintf(stderr, "WARNING: server getnameinfo failed!\n");    
+        else fprintf(stderr, "WARNING: server getnameinfo failed with err %d!\n", err);    
     }
 
     freeaddrinfo(server_info);
@@ -186,7 +194,7 @@ socket_t TCP_connect2(const char* addr, const char* port, bool verbose)
     // inactivity timer
     struct timeval timer = { NET_TIMEOUT, 0 };
     if (setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, (char*)&timer, sizeof(timer)) == -1) {
-        fprintf(stderr, "WARNING: Connect inactivity timer failed!\n");
+        fprintf(stderr, "WARNING: Connect inactivity timer failed with err %d!\n", TCP_ERRNO);
     }
 
     return client_socket;
@@ -277,10 +285,11 @@ socket_t TCP_listen2(const char* port, bool ipv6, bool verbose)
     if (verbose) {
         char host[NI_MAXHOST];
         char service[NI_MAXSERV];
-        if (getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
-            NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
+        int err = getnameinfo(p->ai_addr, (socklen_t)p->ai_addrlen, host, NI_MAXHOST, service,
+            NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV);
+        if (err == 0)
             printf("MESSAGE: Start to listen on addr: %s port: %s.\n", host, service);
-        else fprintf(stderr, "WARNING: Server getnameinfo failed!\n");
+        else fprintf(stderr, "WARNING: Server getnameinfo failed with err %d!\n", err);
     }
     
     freeaddrinfo(server_info);
@@ -304,15 +313,16 @@ socket_t TCP_accept2(socket_t socket, bool verbose)
     if (verbose) {
         char host[NI_MAXHOST];
         char service[NI_MAXSERV];
-        if (getnameinfo((struct sockaddr*)&client_addr, sizeof(struct sockaddr_storage), host,
-            NI_MAXHOST, service, NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV) == 0)
+        int err = getnameinfo((struct sockaddr*)&client_addr, sizeof(struct sockaddr_storage), host,
+            NI_MAXHOST, service, NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV);
+        if (err == 0)
             printf("MESSAGE: Accepted connection from addr: %s port: %s.\n", host, service);
-        else fprintf(stderr, "WARNING: Client getnameinfo failed!\n");
+        else fprintf(stderr, "WARNING: Client getnameinfo failed with err %d!\n", err);
     }
 
     // inactivity timer
     if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char*)&timer, sizeof(timer)) == -1) {
-        fprintf(stderr, "WARNING: Accept inactivity timer failed!\n");
+        fprintf(stderr, "WARNING: Accept inactivity timer failed with err %d!\n", TCP_ERRNO);
     }
 
     return client_socket;
@@ -348,12 +358,7 @@ int TCP_recv2(socket_t socket, char** data_ptr, bool verbose)
     if (recv_data(socket, data, total_size, "Data") == -1) return -1;
     if (send_data(socket, buffer, NET_MAX_CTRL, "Data") == -1) return -1;
 
-    // close
-    char temp[1];
-    if (recv(socket, temp, 1, 0) == 0) {
-        if (verbose) printf("MESSAGE: Receive succeeded.\n");
-    }
-    else fprintf(stderr, "ERROR: Unknown!\n");
+    if (verbose) printf("MESSAGE: Received %d bytes\n", total_size);
 
     *data_ptr = data;
     return total_size;
