@@ -71,6 +71,13 @@ int TCP_send(socket_t socket, const char* data, unsigned total_size);
 // Closes socket on failure.
 int TCP_recv(socket_t socket, char** data_ptr);
 
+// Orderly shutdown, preventing further send()s.
+// Call this before close() to guarantee sent
+// data is received on the other end.
+// https://stackoverflow.com/questions/48208236
+// https://learn.microsoft.com/en-us/windows/win32/winsock/graceful-shutdown-linger-options-and-socket-closure-2
+void TCP_wrshutdown(socket_t socket);
+
 // Close socket. For the server, this must be
 // called on both the listen and accept sockets.
 void TCP_close(socket_t socket);

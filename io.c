@@ -49,10 +49,8 @@ bool write_png(const char* filename, const void* data, int width, int height, in
     return stbi_write_png(filename, width, height, channels, data, 0);
 }
 
-#define NET_TIMEOUT 30 // in seconds
-#define NET_MAX_CTRL 64 // 11 is enough, reserved for other control commands
-#define ACK_YES "yes"
-#define ACK_NO "no"
+#define NET_TIMEOUT 30
+#define NET_MAXINIT 11 // max size of init message
 
 #ifdef _WIN32
 #define TCP_ERRNO WSAGetLastError()
@@ -80,6 +78,22 @@ void TCP_close(socket_t socket)
     }
 }
 
+void TCP_wrshutdown(socket_t socket)
+{
+#ifdef _WIN32
+    int ret = shutdown(socket, SD_SEND);
+#else
+    int ret = shutdown(socket, SHUT_WR);
+#endif
+    if (ret != 0) {
+        // should never happen. not much we can do if it does
+        fprintf(stderr, "ERROR: Failed to shut_wr socket with err %d\n", TCP_ERRNO);
+        // close the socket, else future TCP calls may result in deadlock
+        TCP_close(socket);
+    }
+
+}
+
 // TCP send loop
 // size should be in range (0B, 2GiB)
 // returns total byte send, -1 for error (with socket cleanup)
@@ -105,7 +119,7 @@ int recv_data(socket_t socket, char* data, unsigned total_size, const char* log_
     unsigned recv_left = total_size;
     while(true) {
         int recv_byte = recv(socket, data+total_size-recv_left, recv_left, 0);
-        if (recv_byte < 1) {
+        if (recv_byte == -1) {
             fprintf(stderr, "ERROR: %s message receive failed with err %d\n", log_name, TCP_ERRNO);
             TCP_close(socket);
             return -1;
@@ -207,38 +221,23 @@ int TCP_send2(socket_t socket, const char* data, unsigned total_size, bool verbo
         return -1;
     }
 
-    if (verbose) printf("MESSAGE: Send start.\n");
+    if (verbose) 
+        printf("MESSAGE: Send start.\n");
 
-    // init msg
-    char buffer[NET_MAX_CTRL];
-    memset(buffer, 0, NET_MAX_CTRL);
+    // size of data
+    char buffer[NET_MAXINIT];
+    memset(buffer, 0, NET_MAXINIT);
     sprintf(buffer, "%u", total_size);
-    if (send_data(socket, buffer, NET_MAX_CTRL, "Initial") == -1) {
+    if (send_data(socket, buffer, NET_MAXINIT, "Initial") == -1) {
         return -1;
-    }
-    if (recv_data(socket, buffer, NET_MAX_CTRL, "Initial") == -1) {
-        return -1;
-    }
-    if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
-        fprintf(stderr, "ERROR: Initial message acknowledge failed!\n");
-        TCP_close(socket);
-        return -1;
-    }
-    
+    }  
     // data msg
     if (send_data(socket, data, total_size, "Data") == -1) {
         return -1;
     }
-    if (recv_data(socket, buffer, NET_MAX_CTRL, "Data") == -1) {
-        return -1;
-    }
-    if (strncmp(buffer, ACK_YES, NET_MAX_CTRL)) {
-        fprintf(stderr, "ERROR: Data message acknowledge failed!\n");
-        TCP_close(socket);
-        return -1;
-    }
 
-    if (verbose) printf("MESSAGE: Sent %d bytes successfully\n", total_size);
+    if (verbose) 
+        printf("MESSAGE: Sent %d bytes\n", total_size);
 
     return total_size;
 }
@@ -335,30 +334,30 @@ int TCP_recv2(socket_t socket, char** data_ptr, bool verbose)
         return -1;
     }
     *data_ptr = NULL;
+   
+    if (verbose) 
+        printf("MESSAGE: Receive start.\n");
 
-    char* data = NULL;   
-    if (verbose) printf("MESSAGE: Receive start.\n");
-
-    // init msg
-    char buffer[NET_MAX_CTRL];
-    memset(buffer, 0, NET_MAX_CTRL);
-    if (recv_data(socket, buffer, NET_MAX_CTRL, "Initial") == -1) return -1;
+    // size of data
+    char buffer[NET_MAXINIT];
+    memset(buffer, 0, NET_MAXINIT);
+    if (recv_data(socket, buffer, NET_MAXINIT, "Initial") == -1) return -1;
     unsigned total_size = atoi(buffer);
     if (!total_size) {
         fprintf(stderr, "ERROR: Initial message parse failed!\n");
         TCP_close(socket);
         return -1;
     }
-    data = (char*)malloc(total_size);
 
-    strcpy(buffer, ACK_YES);
-    if (send_data(socket, buffer, NET_MAX_CTRL, "Initial") == -1) return -1;
+    // data
+    char* data = (char*)malloc(total_size);  
+    if (recv_data(socket, data, total_size, "Data") == -1) {
+        free(data);
+        return -1;
+    }
 
-    // data msg
-    if (recv_data(socket, data, total_size, "Data") == -1) return -1;
-    if (send_data(socket, buffer, NET_MAX_CTRL, "Data") == -1) return -1;
-
-    if (verbose) printf("MESSAGE: Received %d bytes\n", total_size);
+    if (verbose) 
+        printf("MESSAGE: Received %d bytes\n", total_size);
 
     *data_ptr = data;
     return total_size;
