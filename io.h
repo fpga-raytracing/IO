@@ -38,7 +38,6 @@ typedef int socket_t;
 #define INV_SOCKET (-1)
 #endif
 
-
 #ifdef _WIN32
 // Initialize TCP on Windows.
 // Must only be called once ever unless it fails.
@@ -78,8 +77,10 @@ int TCP_recv(socket_t socket, char** data_ptr);
 // https://learn.microsoft.com/en-us/windows/win32/winsock/graceful-shutdown-linger-options-and-socket-closure-2
 void TCP_wrshutdown(socket_t socket);
 
-// Close socket. For the server, this must be
-// called on both the listen and accept sockets.
+// Close socket. 
+// For the server, this must be called on
+// both the listen and accept sockets.
+// Async signal-safe on POSIX/linux.
 void TCP_close(socket_t socket);
 
 

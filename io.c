@@ -67,14 +67,12 @@ bool write_png(const char* filename, const void* data, int width, int height, in
 
 void TCP_close(socket_t socket)
 {
+    if (socket != INV_SOCKET) {
 #ifdef _WIN32
-    int ret = closesocket(socket);
+        closesocket(socket);
 #else
-    int ret = close(socket);
+        close(socket);
 #endif
-    if (ret != 0) {
-        // cannot retry a close, just log it
-        fprintf(stderr, "ERROR: Failed to close socket with err %d\n", TCP_ERRNO);
     }
 }
 
